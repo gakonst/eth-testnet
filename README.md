@@ -14,6 +14,13 @@ via an nginx load balancer at the host's port 8545.
 - The coinbase address for all mined funds can be found under `keys/`
 - The genesis file for geth can be found under `geth/geth.json`
 
+Requires docker-compose to be installed. Tested on version 1.27.2.
+
+```
+docker-compose build
+docker-compose up
+```
+
 ## TODO
 - Add parity node support
 
