@@ -1,0 +1,133 @@
+# Launches a testnet containing (by default):
+# - Host Port 8545:
+#   - load balancer (nginx) for non mining + bootnode nodes
+#   - 2 geth non-mining nodes
+#   - 2 parity non-mining nodes
+#   - 1 mining bootstrap nodes (connected to by all nodes)
+# - Host Port 7545-7546:
+#   - 2 geth mining nodes
+# - Host Port 9545:
+#   - 1 MEV geth mining node
+version: "2"
+
+services:
+    ##########################
+    # Load Balancer          #
+    ##########################
+
+    # balance requests to non-mining nodes (bootnode + geth + parity containers, look at nginx/nginx.conf)
+    loadbalancer:
+        build: nginx
+        ports:
+            - 8545:8545
+        networks:
+            - testnet
+        depends_on:
+            - bootnode
+            - geth
+
+    ##########################
+    # Bootnode               #
+    ##########################
+
+    # We have a master mining geth bootnode which all other nodes
+    # use to initiate their connections to
+    bootnode:
+        # just run 1 bootnode
+        scale: 1
+        build:
+            context: ./geth
+            dockerfile: geth.dockerfile
+        # keep it always up so nodes can connect to each other
+        restart: always
+        # name it for easy discovery by other nodes
+        hostname: bootnode
+        environment:
+            BOOTNODE: 1
+            MINER: 1
+        networks:
+            - testnet
+        # expose P2P ports in case non-docker external nodes
+        # would want to connect to the network
+        ports:
+            - 30303:30303
+        volumes:
+            # we use a pre-generated bootnode private key
+            # along with the corresponding pubkey on all
+            # connecting nodes to ensure that 
+            - ./bootnode/boot.key:/root/boot.key
+            # The miner must have the keystore mounted
+            # for the etherbase
+            - ./keys/:/root/.ethereum/keystore:rw
+
+    ##########################
+    # Nodes                  #
+    ##########################
+
+    geth:
+        build:
+            context: ./geth
+            dockerfile: geth.dockerfile
+        scale: 4
+        links: 
+            - "bootnode"
+        environment:
+            MINER: 0
+        networks:
+            - testnet
+        volumes:
+            # connect to the public bootnode
+            - ./bootnode/boot.pubkey:/root/boot.pubkey
+
+    ##########################
+    # Miners                 #
+    ##########################
+
+    # A miner is just a geth with env MINER=1
+    geth_miner:
+        # We have to run a few miners in order to work around:
+        # - https://github.com/ethereum/go-ethereum/issues/2769
+        # - https://github.com/ethereum/go-ethereum/issues/3694
+        scale: 2
+        build:
+            context: ./geth
+            dockerfile: geth.dockerfile
+        links: 
+            - "bootnode"
+        networks:
+            - testnet
+        volumes:
+            - ./bootnode/boot.pubkey:/root/boot.pubkey
+            # The miner must have the keystore mounted
+            # for the etherbase
+            - ./keys/:/root/.ethereum/keystore:rw
+        environment:
+            MINER: 1
+        ports:
+            # Expose the miners to the host's 7545 and 7546 ports
+            - 7545-7546:8545
+
+    # The MEV Geth miner exposes the mev bundle APIs
+    # under `eth_sendBundle`
+    mev_geth_miner:
+        scale: 1
+        build:
+            context: ./geth
+            dockerfile: mev_geth.dockerfile
+        links: 
+            - "bootnode"
+        networks:
+            - testnet
+        volumes:
+            - ./bootnode/boot.pubkey:/root/boot.pubkey
+            # The miner must have the keystore mounted
+            # for the etherbase
+            - ./keys/:/root/.ethereum/keystore:rw
+        environment:
+            MINER: 1
+        # Expose MEV Geth at 9545 on the host
+        ports:
+            - 9545:8545
+
+networks:
+  testnet:
